@@ -106,12 +106,12 @@ int main(void)
   while (1)
   {
     /* USER CODE END WHILE */
-	uint8_t CardID[5];
+	uint8_t CardID[4];
 	HAL_Delay(100);
 
 	if (TM_MFRC522_Check(CardID) == MI_OK) {
 		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, GPIO_PIN_SET);
-		sprintf(msg, "Card UID: %02X%02X%02X%02X%02X\r\n", CardID[0], CardID[1], CardID[2], CardID[3], CardID[4]);
+		sprintf(msg, "Card UID: %02X%02X%02X%02X\r\n", CardID[0], CardID[1], CardID[2], CardID[3]);
 		HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 1000);
 	} else {
 		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13, GPIO_PIN_SET);
