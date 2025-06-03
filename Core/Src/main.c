@@ -21,9 +21,9 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include "tm_stm32f4_mfrc522.h"
-#include "string.h"
-#include <stdio.h>
+#include <stdio.h>					// Để sử dụng chính xác hàm sprintf mà không bị warning với kiểu dữ liệu char *
+#include <string.h>					// Để sử dụng chính xác các hàm xử lý chuỗi mà không bị warning với kiểu dữ liệu char *
+#include "tm_stm32f4_mfrc522.h"		// Sử dụng thư viện giao tiêp với module MFRC522 đã import vào dự án
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -81,7 +81,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-  TM_MFRC522_Init();
+
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -96,6 +96,8 @@ int main(void)
   MX_SPI4_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
+
+  TM_MFRC522_Init();
   char msg[100];
   sprintf(msg, "RC522 RFID Reader Initialized\r\n");
   HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 1000);
@@ -104,22 +106,25 @@ int main(void)
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
-  {
-    /* USER CODE END WHILE */
-	uint8_t CardID[4];
-	HAL_Delay(100);
+   {
+     /* USER CODE END WHILE */
+ 	uint8_t CardID[5];
+ 	HAL_Delay(100);
 
-	if (TM_MFRC522_Check(CardID) == MI_OK) {
-		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, GPIO_PIN_SET);
-		sprintf(msg, "Card UID: %02X%02X%02X%02X\r\n", CardID[0], CardID[1], CardID[2], CardID[3]);
-		HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 1000);
-	} else {
-		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13, GPIO_PIN_SET);
-		sprintf(msg, "No Card Found!\r\n");
-		HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 1000);
-	}
-    /* USER CODE BEGIN 3 */
-  }
+ 	if (TM_MFRC522_Check(CardID) == MI_OK) {
+ 		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, GPIO_PIN_SET);
+ 		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13, GPIO_PIN_RESET);
+ 		sprintf(msg, "Card UID: %02X%02X%02X%02X%02X\r\n", CardID[0], CardID[1], CardID[2], CardID[3], CardID[4]);
+ 		HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 1000);
+ 	} else {
+ 		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13, GPIO_PIN_SET);
+ 		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, GPIO_PIN_RESET);
+ 		sprintf(msg, "No Card Found!\r\n");
+ 		HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 1000);
+
+ 	}
+     /* USER CODE BEGIN 3 */
+   }
   /* USER CODE END 3 */
 }
 
