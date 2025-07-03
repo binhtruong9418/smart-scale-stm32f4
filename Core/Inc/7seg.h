@@ -34,7 +34,16 @@
 #define PORT_7SEG_CONTROL1		GPIOG
 #define PIN_7SEG_CONTROL1		GPIO_PIN_3
 
+// Hàm gốc - hiển thị số nguyên (0-99)
 void Set7SegDisplayValue(int val);
-void Run7SegDisplay();
+
+// Hàm mới - hiển thị số thập phân 1 chữ số (0.0-9.9)
+void Set7SegDisplayDecimal(float val);
+
+// Hàm mới - hiển thị số với dấu thập phân tùy chọn
+void Set7SegDisplayWithDecimal(int val, int show_decimal);
+
+// Hàm chạy hiển thị (không thay đổi)
+void Run7SegDisplay(void);
 
 #endif /* INC_7SEG_H_ */

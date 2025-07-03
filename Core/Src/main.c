@@ -21,6 +21,8 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include <stdarg.h>
+#include <math.h>
 #include <stdio.h>					// Để sử dụng chính xác hàm sprintf mà không bị warning với kiểu dữ liệu char *
 #include <string.h>					// Để sử dụng chính xác các hàm xử lý chuỗi mà không bị warning với kiểu dữ liệu char *
 #include "tm_stm32f4_mfrc522.h"		// Sử dụng thư viện giao tiêp với module MFRC522 đã import vào dự án
@@ -51,7 +53,16 @@ TIM_HandleTypeDef htim6;
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
-
+typedef struct {
+    float current_weight;
+    float previous_weight;
+    uint8_t weight_stable_count;
+    uint8_t system_ready;
+    uint32_t last_measurement_time;
+    uint32_t last_display_time;
+    float weight_threshold;
+} scale_state_t;
+scale_state_t scale_state = {0};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -62,24 +73,34 @@ static void MX_USART1_UART_Init(void);
 static void MX_TIM6_Init(void);
 /* USER CODE BEGIN PFP */
 
+void scale_init(void);
+void scale_calibrate(void);
+float scale_read_weight(void);
+float scale_filter_weight(float raw_weight);
+uint8_t scale_is_weight_stable(float weight);
+void scale_display_weight(float weight);
+void scale_process_rfid(float weight);
+void scale_send_uart_data(const char* format, ...);
+void scale_handle_error(const char* error_msg);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+// Configuration constants
+#define WEIGHT_STABILITY_THRESHOLD  0.01f  // 10g threshold for stability
+#define WEIGHT_STABILITY_COUNT      5      // Number of stable readings required
+#define MEASUREMENT_INTERVAL        100    // ms between measurements
+#define DISPLAY_UPDATE_INTERVAL     500    // ms between display updates
+#define WEIGHT_FILTER_ALPHA         0.8f   // Low-pass filter coefficient
 //config loadcell
 #define HX711_DT_PORT GPIOA
 #define HX711_DT_PIN  GPIO_PIN_11
 #define HX711_SCK_PORT GPIOA
 #define HX711_SCK_PIN  GPIO_PIN_12
+#define SCALE_FACTOR      9700.0f  // Calibration factor (adjust based on your load cell)
 
 hx711_t hx711;
-
-long scale_factor = 90000;  // Giá trị scale sẽ được hiệu chỉnh
-long offset = 0;
-
-char msg[100];
-//led7
-int count = 0;
+char uart_buffer[128];
 /* USER CODE END 0 */
 
 /**
@@ -117,68 +138,57 @@ int main(void)
   //led 7 segment
   HAL_TIM_Base_Start_IT(&htim6);
 
+  // Initialize scale system
+  scale_init();
+
   //RFID
   TM_MFRC522_Init();
-  sprintf(msg, "RC522 RFID Reader Initialized\r\n");
-  HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 1000);
+  scale_send_uart_data("Smart Scale System Initialized\r\n");
 
-  // Khởi tạo HX711
-  hx711_init(&hx711, HX711_SCK_PORT, HX711_SCK_PIN, HX711_DT_PORT, HX711_DT_PIN);
-  set_gain(&hx711, 128, 32);
-  tare_all(&hx711, 10);
   HAL_Delay(1000);
-  	  // Dùng offset do tare_all tính sẵn
-  offset = hx711.Aoffset;
-  scale_factor = -33333; //chỉnh độ nhạy cân
+  scale_state.system_ready = 1;
+  scale_state.last_measurement_time = HAL_GetTick();
+  scale_state.last_display_time = HAL_GetTick();
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-//	//led7check
-//  	count++;  // Tăng biến đếm
-//  	if (count > 99) count = 0;
-//
-//  	if (count % 2 == 1)
-//  		Set7SegDisplayValue(count);  // Hiển thị số lẻ
-//  	else
-//  		Set7SegDisplayValue(0);  // Hiển thị 00
-//
-//  	HAL_Delay(500);
+	  uint32_t current_time = HAL_GetTick();
 
-  	// loadcell
-	long raw = read_average(&hx711, 10, CHANNEL_A);
-	long corrected = raw - offset;
-	int weight = (corrected + scale_factor/2) / scale_factor;
-	if (weight < 0) weight = 0;
-	if (weight > 10) weight = 10;
-//	sprintf(msg, "Raw=%ld Offset=%ld Corr=%ld Weight=%d kg\r\n", raw, offset, corrected, weight);
-//	HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 1000);
-//	HAL_Delay(500);
+	  // Periodic weight measurement
+	  if (current_time - scale_state.last_measurement_time >= MEASUREMENT_INTERVAL) {
+		  scale_state.last_measurement_time = current_time;
+		  // Read and filter weight
+		  float raw_weight = scale_read_weight();
+		  float filtered_weight = scale_filter_weight(raw_weight);
 
-	//led7 display
-	Set7SegDisplayValue(weight);
+		  // Debug: Always send raw readings via UART
+//		  scale_send_uart_data("DEBUG - Raw: %.3f, Filtered: %.3f\r\n", raw_weight, filtered_weight);
 
-  	// Đọc RFID
-  	uint8_t CardID[5];
-  	HAL_Delay(100);
+		  // Update current weight regardless of stability for debugging
+		  scale_state.current_weight = filtered_weight;
 
-  	if (TM_MFRC522_Check(CardID) == MI_OK) {
-  		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, GPIO_PIN_SET);
-  		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13, GPIO_PIN_RESET);
-
-  		sprintf(msg, "RFID: %02X%02X%02X%02X%02X Weight: %d kg\r\n",
-  				CardID[0], CardID[1], CardID[2], CardID[3], CardID[4], weight);
-  		HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 1000);
-  	} else {
-  		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13, GPIO_PIN_SET);
-  		HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, GPIO_PIN_RESET);
-
-  		sprintf(msg, "No Card Found! Weight: %d kg\r\n", weight);
-  		HAL_UART_Transmit(&huart1, (uint8_t*)msg, strlen(msg), 1000);
-  	}
-
+		  // Check weight stability
+		  if (scale_is_weight_stable(filtered_weight)) {
+			  // Weight is stable, update display
+			  if (current_time - scale_state.last_display_time >= DISPLAY_UPDATE_INTERVAL) {
+				  scale_state.last_display_time = current_time;
+				  scale_display_weight(scale_state.current_weight);
+				  scale_process_rfid(scale_state.current_weight);
+			  }
+		  } else {
+			  // Weight is not stable, but still update display more frequently for debugging
+			  if (current_time - scale_state.last_display_time >= (DISPLAY_UPDATE_INTERVAL / 2)) {
+				  scale_state.last_display_time = current_time;
+				  scale_display_weight(scale_state.current_weight);
+			  }
+		  }
+	  }
+	  // Small delay to prevent excessive CPU usage
+	  HAL_Delay(10);
   }
     /* USER CODE END WHILE */
 
@@ -413,6 +423,215 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+void scale_init(void)
+{
+    scale_send_uart_data("Initializing HX711 load cell...\r\n");
+
+    // Initialize HX711
+    hx711_init(&hx711, HX711_SCK_PORT, HX711_SCK_PIN, HX711_DT_PORT, HX711_DT_PIN);
+
+    // Configure HX711 settings
+    set_gain(&hx711, 128, 32);  // Channel A: 128 gain, Channel B: 32 gain
+
+    // Debug: Test if HX711 is responding
+	if (is_ready(&hx711)) {
+		scale_send_uart_data("HX711 is ready!\r\n");
+
+		// Read some raw values for debugging
+		for (int i = 0; i < 5; i++) {
+			long raw = get_value(&hx711, 1, CHANNEL_A);
+			scale_send_uart_data("Raw reading %d: %ld\r\n", i+1, raw);
+			HAL_Delay(100);
+		}
+	} else {
+		scale_send_uart_data("HX711 is NOT ready!\r\n");
+	}
+
+    // Set initial scale factor (you may need to adjust this)
+    set_scale(&hx711, SCALE_FACTOR, SCALE_FACTOR);
+
+    // Perform initial calibration
+    scale_calibrate();
+
+    // Initialize state variables
+    scale_state.current_weight = 0.0f;
+    scale_state.previous_weight = 0.0f;
+    scale_state.weight_stable_count = 0;
+    scale_state.weight_threshold = WEIGHT_STABILITY_THRESHOLD;
+
+    scale_send_uart_data("Scale initialization complete\r\n");
+}
+
+/**
+ * @brief Calibrate the scale (tare)
+ */
+void scale_calibrate(void)
+{
+    scale_send_uart_data("Calibrating scale... Please ensure scale is empty\r\n");
+    HAL_Delay(2000);  // Give user time to clear scale
+
+    // Perform tare operation
+    tare_all(&hx711, 10);
+
+    scale_send_uart_data("Scale calibration complete\r\n");
+}
+
+/**
+ * @brief Read raw weight from HX711
+ * @return Raw weight value in kg
+ */
+float scale_read_weight(void)
+{
+	// Debug: Check if HX711 is ready
+	if (!is_ready(&hx711)) {
+//		scale_send_uart_data("DEBUG - HX711 not ready!\r\n");
+		return 0.0f;
+	}
+
+	// Get raw value first for debugging
+	long raw_value = get_value(&hx711, 1, CHANNEL_A);  // Single reading for faster response
+//	scale_send_uart_data("DEBUG - Raw ADC: %ld\r\n", raw_value);
+
+	// Get weight using library function
+	float weight = get_weight(&hx711, 1, CHANNEL_A);  // Single reading for faster response
+
+	// Debug: Show weight before filtering
+//	scale_send_uart_data("DEBUG - Weight before filter: %.3f\r\n", weight);
+
+	// Ensure weight is not negative (noise or drift)
+	if (weight < 0.0f) {
+		weight = 0.0f;
+	}
+
+	return weight;
+}
+
+/**
+ * @brief Apply low-pass filter to weight reading
+ * @param raw_weight: Raw weight reading
+ * @return Filtered weight
+ */
+float scale_filter_weight(float raw_weight)
+{
+    static float filtered_weight = 0.0f;
+    static uint8_t first_reading = 1;
+
+    if (first_reading) {
+        filtered_weight = raw_weight;
+        first_reading = 0;
+    } else {
+        // Simple low-pass filter: y[n] = α * x[n] + (1-α) * y[n-1]
+        filtered_weight = WEIGHT_FILTER_ALPHA * raw_weight + (1.0f - WEIGHT_FILTER_ALPHA) * filtered_weight;
+    }
+
+    return filtered_weight;
+}
+
+/**
+ * @brief Check if weight reading is stable
+ * @param weight: Current weight reading
+ * @return 1 if stable, 0 if not stable
+ */
+uint8_t scale_is_weight_stable(float weight)
+{
+    float weight_diff = fabsf(weight - scale_state.previous_weight);
+
+    if (weight_diff < scale_state.weight_threshold) {
+        scale_state.weight_stable_count++;
+        if (scale_state.weight_stable_count >= WEIGHT_STABILITY_COUNT) {
+            scale_state.weight_stable_count = WEIGHT_STABILITY_COUNT;  // Cap the counter
+            scale_state.previous_weight = weight;
+            return 1;
+        }
+    } else {
+        scale_state.weight_stable_count = 0;
+        scale_state.previous_weight = weight;
+    }
+
+    return 0;
+}
+
+/**
+ * @brief Display weight on 7-segment display and send via UART
+ * @param weight: Weight to display in kg
+ */
+void scale_display_weight(float weight)
+{
+	if (weight < 0.0f) weight = 0.0f;
+	if (weight > 9.9f) weight = 9.9f;
+
+	// Chuyển đổi sang số nguyên để hiển thị (VD: 2.5kg -> 25)
+	int display_value = (int)(weight * 10 + 0.5f);  // +0.5 để làm tròn
+
+	// Hiển thị trên LED 7 đoạn với 1 chữ số thập phân
+	Set7SegDisplayWithDecimal(display_value, 1);  // Hiển thị với 1 chữ số sau dấu phẩy
+
+	// Gọi hàm chạy hiển thị LED 7 đoạn
+	Run7SegDisplay();
+
+    // Send weight data via UART
+//    scale_send_uart_data("Weight: %.3f kg (%.0f g)\r\n", weight, weight * 1000);
+    scale_send_uart_data("Weight: %d (display_value) = %.1f kg\r\n", display_value, weight);
+}
+
+/**
+ * @brief Process RFID reading and combine with weight data
+ * @param weight: Current stable weight
+ */
+void scale_process_rfid(float weight)
+{
+    uint8_t CardID[5];
+
+    if (TM_MFRC522_Check(CardID) == MI_OK) {
+        // Card detected - turn on green LED
+        HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, GPIO_PIN_SET);   // Green LED ON
+        HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13, GPIO_PIN_RESET); // Red LED OFF
+
+        // Send combined data
+        scale_send_uart_data("RFID: %02X%02X%02X%02X%02X | Weight: %.3f kg\r\n",
+                           CardID[0], CardID[1], CardID[2], CardID[3], CardID[4], weight);
+    } else {
+        // No card detected - turn on red LED
+        HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13, GPIO_PIN_SET);   // Red LED ON
+        HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, GPIO_PIN_RESET); // Green LED OFF
+    }
+}
+
+/**
+ * @brief Send formatted data via UART
+ * @param format: Printf-style format string
+ * @param ...: Variable arguments
+ */
+void scale_send_uart_data(const char* format, ...)
+{
+    va_list args;
+    va_start(args, format);
+
+    int len = vsnprintf(uart_buffer, sizeof(uart_buffer), format, args);
+
+    va_end(args);
+
+    if (len > 0 && len < sizeof(uart_buffer)) {
+        HAL_UART_Transmit(&huart1, (uint8_t*)uart_buffer, len, 1000);
+    }
+}
+
+/**
+ * @brief Handle system errors
+ * @param error_msg: Error message to display
+ */
+void scale_handle_error(const char* error_msg)
+{
+    scale_send_uart_data("ERROR: %s\r\n", error_msg);
+
+    // Flash both LEDs to indicate error
+    for (int i = 0; i < 5; i++) {
+        HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13 | GPIO_PIN_14, GPIO_PIN_SET);
+        HAL_Delay(200);
+        HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13 | GPIO_PIN_14, GPIO_PIN_RESET);
+        HAL_Delay(200);
+    }
+}
 
 /* USER CODE END 4 */
 
