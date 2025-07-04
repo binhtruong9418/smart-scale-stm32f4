@@ -97,7 +97,7 @@ void scale_handle_error(const char* error_msg);
 #define HX711_DT_PIN  GPIO_PIN_11
 #define HX711_SCK_PORT GPIOA
 #define HX711_SCK_PIN  GPIO_PIN_12
-#define SCALE_FACTOR      9700.0f  // Calibration factor (adjust based on your load cell)
+#define SCALE_FACTOR      12000.0f  // Calibration factor (adjust based on your load cell)
 
 hx711_t hx711;
 char uart_buffer[128];
