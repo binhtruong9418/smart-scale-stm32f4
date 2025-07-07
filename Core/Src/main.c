@@ -62,6 +62,19 @@ typedef struct {
     uint32_t last_display_time;
     float weight_threshold;
 } scale_state_t;
+
+typedef struct {
+    float history[10];
+    int head; // Vị trí tiếp theo để ghi dữ liệu (cho bộ đệm vòng)
+    int count; // Số lượng dữ liệu hợp lệ trong history
+    float saved_weight; // Cân nặng ổn định cuối cùng đã được lưu
+} WeightHistory;
+
+typedef struct {
+    uint8_t uid[5]; // Mã UID của thẻ RFID
+    WeightHistory weight_data;
+} CardData;
+
 scale_state_t scale_state = {0};
 /* USER CODE END PV */
 
@@ -99,8 +112,18 @@ void scale_handle_error(const char* error_msg);
 #define HX711_SCK_PIN  GPIO_PIN_12
 #define SCALE_FACTOR      44000.0f  // Calibration factor (adjust based on your load cell)
 
+#define MAX_WEIGHT_HISTORY 10
+#define MAX_REGISTERED_CARDS 20
 hx711_t hx711;
 char uart_buffer[128];
+CardData card_database[MAX_REGISTERED_CARDS];
+int registered_card_count = 0;
+
+// Buffer cho việc nhận lệnh từ UART
+uint8_t uart_rx_buffer[64];
+uint8_t uart_rx_data;
+uint8_t uart_rx_index = 0;
+volatile uint8_t uart_command_ready = 0;
 /* USER CODE END 0 */
 
 /**
@@ -145,6 +168,8 @@ int main(void)
   TM_MFRC522_Init();
   scale_send_uart_data("Smart Scale System Initialized\r\n");
 
+  HAL_UART_Receive_IT(&huart1, &uart_rx_data, 1);
+
   HAL_Delay(1000);
   scale_state.system_ready = 1;
   scale_state.last_measurement_time = HAL_GetTick();
@@ -156,7 +181,13 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  if (uart_command_ready) {
+		   process_uart_command();
+		   // Cờ uart_command_ready sẽ được reset bên trong process_uart_command()
+	   }
+
 	  uint32_t current_time = HAL_GetTick();
+
 
 	  // Periodic weight measurement
 	  if (current_time - scale_state.last_measurement_time >= MEASUREMENT_INTERVAL) {
@@ -419,6 +450,114 @@ static void MX_GPIO_Init(void)
 }
 
 /* USER CODE BEGIN 4 */
+
+CardData* find_or_register_card(uint8_t* card_uid) {
+    // 1. Tìm thẻ đã tồn tại
+    for (int i = 0; i < registered_card_count; i++) {
+        if (memcmp(card_database[i].uid, card_uid, 5) == 0) {
+            return &card_database[i];
+        }
+    }
+
+    // 2. Nếu không tìm thấy, đăng ký thẻ mới nếu còn chỗ
+    if (registered_card_count < MAX_REGISTERED_CARDS) {
+        CardData* new_card = &card_database[registered_card_count];
+        memcpy(new_card->uid, card_uid, 5);
+        // Khởi tạo lịch sử cân nặng
+        memset(&new_card->weight_data, 0, sizeof(WeightHistory));
+        registered_card_count++;
+        scale_send_uart_data("New card registered. Total: %d\r\n", registered_card_count);
+        return new_card;
+    }
+
+    // 3. Database đầy
+    scale_send_uart_data("ERROR: Card database is full. Cannot register new card.\r\n");
+    return NULL;
+}
+
+void push_weight_to_history(WeightHistory* history, float weight) {
+    history->history[history->head] = weight;
+    history->head = (history->head + 1) % MAX_WEIGHT_HISTORY;
+    if (history->count < MAX_WEIGHT_HISTORY) {
+        history->count++;
+    }
+}
+
+uint8_t are_all_weights_stable(WeightHistory* history) {
+    if (history->count < MAX_WEIGHT_HISTORY) {
+        return 0; // Chưa đủ 10 giá trị
+    }
+
+    float first_weight = history->history[0];
+    for (int i = 1; i < MAX_WEIGHT_HISTORY; i++) {
+        // Sử dụng một ngưỡng nhỏ để so sánh số thực
+        if (fabsf(history->history[i] - first_weight) > WEIGHT_STABILITY_THRESHOLD) {
+            return 0; // Tìm thấy một giá trị khác biệt
+        }
+    }
+
+    return 1; // Tất cả 10 giá trị đều giống nhau
+}
+
+void process_uart_command(void) {
+    if (strlen((char*)uart_rx_buffer) > 0) {
+        scale_send_uart_data("\r\n--- Registered Card List ---\r\n");
+        if (registered_card_count == 0) {
+            scale_send_uart_data("No cards registered yet.\r\n");
+        } else {
+            for (int i = 0; i < registered_card_count; i++) {
+                scale_send_uart_data("Card %d | UID: %02X%02X%02X%02X%02X | Saved Weight: %.3f kg\r\n",
+                                     i + 1,
+                                     card_database[i].uid[0],
+                                     card_database[i].uid[1],
+                                     card_database[i].uid[2],
+                                     card_database[i].uid[3],
+                                     card_database[i].uid[4],
+                                     card_database[i].weight_data.saved_weight);
+            }
+        }
+        scale_send_uart_data("----------------------------\r\n");
+    } else {
+        scale_send_uart_data("Unknown command: %s\r\n", uart_rx_buffer);
+    }
+
+    // Reset buffer và cờ
+    memset(uart_rx_buffer, 0, sizeof(uart_rx_buffer));
+    uart_rx_index = 0;
+    uart_command_ready = 0;
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+    if (huart->Instance == USART1) {
+        if (uart_rx_data == '\n' || uart_rx_data == '\r' || uart_rx_index >= sizeof(uart_rx_buffer) - 1) {
+            uart_rx_buffer[uart_rx_index] = '\0'; // Kết thúc chuỗi
+            if (uart_rx_index > 0) {
+                uart_command_ready = 1; // Báo hiệu có lệnh cần xử lý
+            }
+            uart_rx_index = 0;
+        } else {
+            uart_rx_buffer[uart_rx_index++] = uart_rx_data;
+        }
+        // Kích hoạt lại ngắt nhận UART cho byte tiếp theo
+        HAL_UART_Receive_IT(&huart1, &uart_rx_data, 1);
+    }
+}
+
+void save_weight_to_rfid_card(uint8_t* card_uid, float weight) {
+    // ---- PHẦN NÀY CẦN BẠN CÀI ĐẶT CHI TIẾT ----
+    // 1. Chọn Sector và Block trên thẻ để ghi dữ liệu.
+    // 2. Sử dụng hàm xác thực (ví dụ: PCD_Authenticate).
+    // 3. Chuẩn bị dữ liệu (chuyển float sang mảng byte).
+    // 4. Ghi dữ liệu vào block (ví dụ: PCD_Write).
+    // 5. Kết thúc giao tiếp.
+
+    // Tạm thời, chúng ta chỉ in ra UART để mô phỏng
+    scale_send_uart_data("------ SAVING TO CARD ------\r\n");
+    scale_send_uart_data("Card UID: %02X%02X%02X%02X%02X\r\n",
+                         card_uid[0], card_uid[1], card_uid[2], card_uid[3], card_uid[4]);
+    scale_send_uart_data("Saving Weight: %.3f kg\r\n", weight);
+    scale_send_uart_data("--------------------------\r\n");
+}
 void scale_init(void)
 {
     scale_send_uart_data("Initializing HX711 load cell...\r\n");
@@ -568,16 +707,40 @@ void scale_display_weight(float weight)
  */
 void scale_process_rfid(float weight)
 {
-    uint8_t CardID[5];
+    uint8_t CardUID[5];
 
-    if (TM_MFRC522_Check(CardID) == MI_OK) {
+    if (TM_MFRC522_Check(CardUID) == MI_OK) {
         // Card detected - turn on green LED
         HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, GPIO_PIN_SET);   // Green LED ON
         HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13, GPIO_PIN_RESET); // Red LED OFF
 
+        CardData* current_card = find_or_register_card(CardUID);
+		if (current_card == NULL) {
+			// Lỗi: database đầy, không xử lý tiếp
+			return;
+		}
+
+		push_weight_to_history(&current_card->weight_data, weight);
+
+		if (are_all_weights_stable(&current_card->weight_data)) {
+			float stable_weight = current_card->weight_data.history[0]; // Lấy giá trị ổn định
+
+			// Chỉ lưu nếu giá trị ổn định mới khác với giá trị đã lưu
+			// (tránh ghi vào thẻ liên tục không cần thiết)
+			if (fabsf(stable_weight - current_card->weight_data.saved_weight) > 0.001f) {
+				// Thực hiện lưu giá trị cân nặng vào thẻ RFID
+				save_weight_to_rfid_card(current_card->uid, stable_weight);
+
+				// Cập nhật giá trị đã lưu trong RAM
+				current_card->weight_data.saved_weight = stable_weight;
+			}
+		}
+
         // Send combined data
-        scale_send_uart_data("RFID: %02X%02X%02X%02X%02X | Weight: %.3f kg\r\n",
-                           CardID[0], CardID[1], CardID[2], CardID[3], CardID[4], weight);
+//        scale_send_uart_data("RFID: %02X%02X%02X%02X%02X | Weight: %.3f kg\r\n",
+//                           CardID[0], CardID[1], CardID[2], CardID[3], CardID[4], weight);
+		scale_send_uart_data("Card: %02X..%02X | Weight: %.3f kg | History Cnt: %d\r\n",
+		                           CardUID[0], CardUID[4], weight, current_card->weight_data.count);
     } else {
         // No card detected - turn on red LED
         HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13, GPIO_PIN_SET);   // Red LED ON
