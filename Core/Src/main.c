@@ -475,6 +475,7 @@ float scale_read_weight(void)
 {
 	// Debug: Check if HX711 is ready
 	if (!is_ready(&hx711)) {
+//		scale_send_uart_data("DEBUG - HX711 not ready!\r\n");
 		return 0.0f;
 	}
 
@@ -483,6 +484,7 @@ float scale_read_weight(void)
 
 	// Get weight using library function
 	float weight = get_weight(&hx711, 1, CHANNEL_A);  // Single reading for faster response
+
 
 	// Ensure weight is not negative (noise or drift)
 	if (weight < 0.0f) {
@@ -546,9 +548,17 @@ void scale_display_weight(float weight)
 	if (weight < 0.0f) weight = 0.0f;
 	if (weight > 9.9f) weight = 9.9f;
 
-	int display_value = (int)(weight * 10 + 0.5f);
-	Set7SegDisplayWithDecimal(display_value, 1);
+	// Chuyển đổi sang số nguyên để hiển thị (VD: 2.5kg -> 25)
+	int display_value = (int)(weight * 10 + 0.5f);  // +0.5 để làm tròn
+
+	// Hiển thị trên LED 7 đoạn với 1 chữ số thập phân
+	Set7SegDisplayWithDecimal(display_value, 1);  // Hiển thị với 1 chữ số sau dấu phẩy
+
+	// Gọi hàm chạy hiển thị LED 7 đoạn
 	Run7SegDisplay();
+
+    // Send weight data via UART
+//    scale_send_uart_data("Weight: %.3f kg (%.0f g)\r\n", weight, weight * 1000);
     scale_send_uart_data("Weight: %d (display_value) = %.1f kg\r\n", display_value, weight);
 }
 
