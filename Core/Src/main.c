@@ -105,6 +105,7 @@ void scale_handle_error(const char* error_msg);
 #define MEASUREMENT_INTERVAL        100    // ms between measurements
 #define DISPLAY_UPDATE_INTERVAL     500    // ms between display updates
 #define WEIGHT_FILTER_ALPHA         0.3f   // Low-pass filter coefficient
+
 //config loadcell
 #define HX711_DT_PORT GPIOA
 #define HX711_DT_PIN  GPIO_PIN_11
@@ -183,7 +184,6 @@ int main(void)
   {
 	  if (uart_command_ready) {
 		   process_uart_command();
-		   // Cờ uart_command_ready sẽ được reset bên trong process_uart_command()
 	   }
 
 	  uint32_t current_time = HAL_GetTick();
@@ -199,11 +199,8 @@ int main(void)
 
 		  // Check weight stability
 		  if (scale_is_weight_stable(filtered_weight)) {
-			  // Weight is stable, update display
 			  if (current_time - scale_state.last_display_time >= DISPLAY_UPDATE_INTERVAL) {
 				  scale_state.last_display_time = current_time;
-//				  scale_display_weight(scale_state.current_weight);
-//				  scale_process_rfid(scale_state.current_weight);
 			  }
 		  } else {
 			  // Weight is not stable, but still update display more frequently for debugging
@@ -701,7 +698,7 @@ void scale_display_weight(float weight)
 
     // Send weight data via UART
 //    scale_send_uart_data("Weight: %.3f kg (%.0f g)\r\n", weight, weight * 1000);
-    scale_send_uart_data("Weight: %d (display_value) = %.1f kg\r\n", display_value, weight);
+//    scale_send_uart_data("Weight: %d (display_value) = %.1f kg\r\n", display_value, weight);
 }
 
 /**
@@ -739,8 +736,8 @@ void scale_process_rfid(float weight)
 			}
 		}
 
-		scale_send_uart_data("Card: %02X%02X%02X%02X%02X | Weight: %.3f kg | History Cnt: %d\r\n",
-				CardUID[0], CardUID[1], CardUID[2], CardUID[3], CardUID[4], weight, current_card->weight_data.count);
+//		scale_send_uart_data("Card: %02X%02X%02X%02X%02X | Weight: %.3f kg | History Cnt: %d\r\n",
+//				CardUID[0], CardUID[1], CardUID[2], CardUID[3], CardUID[4], weight, current_card->weight_data.count);
     } else {
         // No card detected - turn on red LED
         HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13, GPIO_PIN_SET);   // Red LED ON
