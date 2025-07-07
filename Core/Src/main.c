@@ -91,13 +91,13 @@ void scale_handle_error(const char* error_msg);
 #define WEIGHT_STABILITY_COUNT      5      // Number of stable readings required
 #define MEASUREMENT_INTERVAL        100    // ms between measurements
 #define DISPLAY_UPDATE_INTERVAL     500    // ms between display updates
-#define WEIGHT_FILTER_ALPHA         0.8f   // Low-pass filter coefficient
+#define WEIGHT_FILTER_ALPHA         0.3f   // Low-pass filter coefficient
 //config loadcell
 #define HX711_DT_PORT GPIOA
 #define HX711_DT_PIN  GPIO_PIN_11
 #define HX711_SCK_PORT GPIOA
 #define HX711_SCK_PIN  GPIO_PIN_12
-#define SCALE_FACTOR      12000.0f  // Calibration factor (adjust based on your load cell)
+#define SCALE_FACTOR      44000.0f  // Calibration factor (adjust based on your load cell)
 
 hx711_t hx711;
 char uart_buffer[128];
@@ -164,11 +164,6 @@ int main(void)
 		  // Read and filter weight
 		  float raw_weight = scale_read_weight();
 		  float filtered_weight = scale_filter_weight(raw_weight);
-
-		  // Debug: Always send raw readings via UART
-//		  scale_send_uart_data("DEBUG - Raw: %.3f, Filtered: %.3f\r\n", raw_weight, filtered_weight);
-
-		  // Update current weight regardless of stability for debugging
 		  scale_state.current_weight = filtered_weight;
 
 		  // Check weight stability
@@ -176,14 +171,15 @@ int main(void)
 			  // Weight is stable, update display
 			  if (current_time - scale_state.last_display_time >= DISPLAY_UPDATE_INTERVAL) {
 				  scale_state.last_display_time = current_time;
-				  scale_display_weight(scale_state.current_weight);
-				  scale_process_rfid(scale_state.current_weight);
+//				  scale_display_weight(scale_state.current_weight);
+//				  scale_process_rfid(scale_state.current_weight);
 			  }
 		  } else {
 			  // Weight is not stable, but still update display more frequently for debugging
 			  if (current_time - scale_state.last_display_time >= (DISPLAY_UPDATE_INTERVAL / 2)) {
 				  scale_state.last_display_time = current_time;
 				  scale_display_weight(scale_state.current_weight);
+				  scale_process_rfid(scale_state.current_weight);
 			  }
 		  }
 	  }
@@ -430,7 +426,6 @@ void scale_init(void)
     // Initialize HX711
     hx711_init(&hx711, HX711_SCK_PORT, HX711_SCK_PIN, HX711_DT_PORT, HX711_DT_PIN);
 
-    // Configure HX711 settings
     set_gain(&hx711, 128, 32);  // Channel A: 128 gain, Channel B: 32 gain
 
     // Debug: Test if HX711 is responding
@@ -440,7 +435,6 @@ void scale_init(void)
 		// Read some raw values for debugging
 		for (int i = 0; i < 5; i++) {
 			long raw = get_value(&hx711, 1, CHANNEL_A);
-			scale_send_uart_data("Raw reading %d: %ld\r\n", i+1, raw);
 			HAL_Delay(100);
 		}
 	} else {
@@ -469,10 +463,7 @@ void scale_calibrate(void)
 {
     scale_send_uart_data("Calibrating scale... Please ensure scale is empty\r\n");
     HAL_Delay(2000);  // Give user time to clear scale
-
-    // Perform tare operation
     tare_all(&hx711, 10);
-
     scale_send_uart_data("Scale calibration complete\r\n");
 }
 
@@ -484,19 +475,14 @@ float scale_read_weight(void)
 {
 	// Debug: Check if HX711 is ready
 	if (!is_ready(&hx711)) {
-//		scale_send_uart_data("DEBUG - HX711 not ready!\r\n");
 		return 0.0f;
 	}
 
 	// Get raw value first for debugging
 	long raw_value = get_value(&hx711, 1, CHANNEL_A);  // Single reading for faster response
-//	scale_send_uart_data("DEBUG - Raw ADC: %ld\r\n", raw_value);
 
 	// Get weight using library function
 	float weight = get_weight(&hx711, 1, CHANNEL_A);  // Single reading for faster response
-
-	// Debug: Show weight before filtering
-//	scale_send_uart_data("DEBUG - Weight before filter: %.3f\r\n", weight);
 
 	// Ensure weight is not negative (noise or drift)
 	if (weight < 0.0f) {
@@ -560,17 +546,9 @@ void scale_display_weight(float weight)
 	if (weight < 0.0f) weight = 0.0f;
 	if (weight > 9.9f) weight = 9.9f;
 
-	// Chuyển đổi sang số nguyên để hiển thị (VD: 2.5kg -> 25)
-	int display_value = (int)(weight * 10 + 0.5f);  // +0.5 để làm tròn
-
-	// Hiển thị trên LED 7 đoạn với 1 chữ số thập phân
-	Set7SegDisplayWithDecimal(display_value, 1);  // Hiển thị với 1 chữ số sau dấu phẩy
-
-	// Gọi hàm chạy hiển thị LED 7 đoạn
+	int display_value = (int)(weight * 10 + 0.5f);
+	Set7SegDisplayWithDecimal(display_value, 1);
 	Run7SegDisplay();
-
-    // Send weight data via UART
-//    scale_send_uart_data("Weight: %.3f kg (%.0f g)\r\n", weight, weight * 1000);
     scale_send_uart_data("Weight: %d (display_value) = %.1f kg\r\n", display_value, weight);
 }
 
