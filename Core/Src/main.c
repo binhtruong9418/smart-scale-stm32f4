@@ -500,7 +500,10 @@ uint8_t are_all_weights_stable(WeightHistory* history) {
 }
 
 void process_uart_command(void) {
-    if (strlen((char*)uart_rx_buffer) > 0) {
+
+	int len = strlen((char*)uart_rx_buffer);
+	uart_rx_buffer[len - 1] = 0;
+    if (strcmp((char*)uart_rx_buffer, "1") == 0) {
         scale_send_uart_data("\r\n--- Registered Card List ---\r\n");
         if (registered_card_count == 0) {
             scale_send_uart_data("No cards registered yet.\r\n");
@@ -736,11 +739,8 @@ void scale_process_rfid(float weight)
 			}
 		}
 
-        // Send combined data
-//        scale_send_uart_data("RFID: %02X%02X%02X%02X%02X | Weight: %.3f kg\r\n",
-//                           CardID[0], CardID[1], CardID[2], CardID[3], CardID[4], weight);
-		scale_send_uart_data("Card: %02X..%02X | Weight: %.3f kg | History Cnt: %d\r\n",
-		                           CardUID[0], CardUID[4], weight, current_card->weight_data.count);
+		scale_send_uart_data("Card: %02X%02X%02X%02X%02X | Weight: %.3f kg | History Cnt: %d\r\n",
+				CardUID[0], CardUID[1], CardUID[2], CardUID[3], CardUID[4], weight, current_card->weight_data.count);
     } else {
         // No card detected - turn on red LED
         HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13, GPIO_PIN_SET);   // Red LED ON
