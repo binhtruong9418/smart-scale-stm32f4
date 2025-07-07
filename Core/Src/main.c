@@ -129,7 +129,7 @@ void add_to_weighing_history(CardData* card, float weight);
 #define HX711_DT_PIN  GPIO_PIN_11
 #define HX711_SCK_PORT GPIOA
 #define HX711_SCK_PIN  GPIO_PIN_12
-#define SCALE_FACTOR      44000.0f  // Calibration factor (adjust based on your load cell)
+#define SCALE_FACTOR      83000.0f  // Calibration factor (adjust based on your load cell)
 
 hx711_t hx711;
 char uart_buffer[128];
@@ -765,7 +765,7 @@ void scale_display_weight(float weight)
 
     // Send weight data via UART
 //    scale_send_uart_data("Weight: %.3f kg (%.0f g)\r\n", weight, weight * 1000);
-//    scale_send_uart_data("Weight: %d (display_value) = %.1f kg\r\n", display_value, weight);
+    scale_send_uart_data("Weight: %d (display_value) = %.3f kg\r\n", display_value, weight);
 }
 
 /**
