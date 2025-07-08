@@ -23,20 +23,67 @@
 /* USER CODE BEGIN Includes */
 #include <stdarg.h>
 #include <math.h>
-#include <stdio.h>					// Để sử dụng chính xác hàm sprintf mà không bị warning với kiểu dữ liệu char *
-#include <string.h>					// Để sử dụng chính xác các hàm xử lý chuỗi mà không bị warning với kiểu dữ liệu char *
-#include "tm_stm32f4_mfrc522.h"		// Sử dụng thư viện giao tiêp với module MFRC522 đã import vào dự án
+#include <stdio.h>			
+#include <string.h>			
+#include "tm_stm32f4_mfrc522.h"
 #include "7seg.h"
 #include "HX711.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef struct {
+    uint8_t uid[5];      // UID card
+    char name[100];      // name of card
+    float   weight;      // weight
+    uint32_t timestamp;  // timestamp (ms from system start)
+} HistoryEntry;
+
+typedef struct {
+    float current_weight;
+    float previous_weight;
+    uint8_t weight_stable_count;
+    uint8_t system_ready;
+    uint32_t last_measurement_time;
+    uint32_t last_display_time;
+    float weight_threshold;
+} scale_state_t;
+
+typedef struct {
+    float history[50];  // use MAX_WEIGHT_HISTORY #define
+    int head;           // Next pointer
+    int count;          // Total valid data
+    float saved_weight; // Stable weight last scale
+} WeightHistory;
+
+typedef struct {
+    uint8_t uid[5]; 
+    WeightHistory weight_data;
+    char name[100];
+} CardData;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+// Config save history
+#define MAX_WEIGHT_HISTORY 5    // Start save weight when have 5 stable weight
+#define MAX_REGISTERED_CARDS 20 // Save 20 card max
+#define MAX_WEIGHING_HISTORY 50 // Save latest 50 cards history
+
+// Configuration constants
+#define WEIGHT_STABILITY_THRESHOLD  0.01f  // 10g threshold for stability
+#define WEIGHT_STABILITY_COUNT      5      // Number of stable readings required
+#define MEASUREMENT_INTERVAL        100    // ms between measurements
+#define DISPLAY_UPDATE_INTERVAL     500    // ms between display updates
+#define WEIGHT_FILTER_ALPHA         0.3f   // Low-pass filter coefficient
+
+//Config loadcell
+#define HX711_DT_PORT     GPIOA
+#define HX711_DT_PIN      GPIO_PIN_11
+#define HX711_SCK_PORT    GPIOA
+#define HX711_SCK_PIN     GPIO_PIN_12
+#define SCALE_FACTOR      83000.0f  // Calibration factor (83000 for 10kg and 44000 for 20kg load cell)
 
 /* USER CODE END PD */
 
@@ -54,45 +101,23 @@ UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
 
-#define MAX_WEIGHT_HISTORY 5
-#define MAX_REGISTERED_CARDS 20
-#define MAX_WEIGHING_HISTORY 50 // Lưu lại 50 lần cân gần nhất
-
-typedef struct {
-    uint8_t uid[5];      // UID của thẻ đã cân
-    char name[100];      // Tên của thẻ tại thời điểm cân
-    float   weight;      // Cân nặng đã được lưu
-    uint32_t timestamp;  // Dấu thời gian (ms từ khi khởi động)
-} HistoryEntry;
-
-typedef struct {
-    float current_weight;
-    float previous_weight;
-    uint8_t weight_stable_count;
-    uint8_t system_ready;
-    uint32_t last_measurement_time;
-    uint32_t last_display_time;
-    float weight_threshold;
-} scale_state_t;
-
-typedef struct {
-    float history[MAX_WEIGHT_HISTORY];
-    int head; // Vị trí tiếp theo để ghi dữ liệu (cho bộ đệm vòng)
-    int count; // Số lượng dữ liệu hợp lệ trong history
-    float saved_weight; // Cân nặng ổn định cuối cùng đã được lưu
-} WeightHistory;
-
-typedef struct {
-    uint8_t uid[5]; // Mã UID của thẻ RFID
-    WeightHistory weight_data;
-    char name[100];
-} CardData;
-
 scale_state_t scale_state = {0};
 HistoryEntry weighing_history[MAX_WEIGHING_HISTORY];
 
 int history_count = 0; // Số mục hợp lệ trong lịch sử
 int history_head = 0;  // Vị trí tiếp theo để ghi (đầu của bộ đệm)
+
+hx711_t hx711;
+char uart_buffer[128];
+CardData card_database[MAX_REGISTERED_CARDS];
+int registered_card_count = 0;
+
+// Buffer for receive from UART
+uint8_t uart_rx_buffer[64];
+uint8_t uart_rx_data;
+uint8_t uart_rx_index = 0;
+volatile uint8_t uart_command_ready = 0;
+
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -117,30 +142,8 @@ void add_to_weighing_history(CardData* card, float weight);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-// Configuration constants
-#define WEIGHT_STABILITY_THRESHOLD  0.01f  // 10g threshold for stability
-#define WEIGHT_STABILITY_COUNT      5      // Number of stable readings required
-#define MEASUREMENT_INTERVAL        100    // ms between measurements
-#define DISPLAY_UPDATE_INTERVAL     500    // ms between display updates
-#define WEIGHT_FILTER_ALPHA         0.3f   // Low-pass filter coefficient
 
-//config loadcell
-#define HX711_DT_PORT GPIOA
-#define HX711_DT_PIN  GPIO_PIN_11
-#define HX711_SCK_PORT GPIOA
-#define HX711_SCK_PIN  GPIO_PIN_12
-#define SCALE_FACTOR      83000.0f  // Calibration factor (adjust based on your load cell)
 
-hx711_t hx711;
-char uart_buffer[128];
-CardData card_database[MAX_REGISTERED_CARDS];
-int registered_card_count = 0;
-
-// Buffer cho việc nhận lệnh từ UART
-uint8_t uart_rx_buffer[64];
-uint8_t uart_rx_data;
-uint8_t uart_rx_index = 0;
-volatile uint8_t uart_command_ready = 0;
 /* USER CODE END 0 */
 
 /**
@@ -175,7 +178,6 @@ int main(void)
   MX_USART1_UART_Init();
   MX_TIM6_Init();
   /* USER CODE BEGIN 2 */
-  //led 7 segment
   HAL_TIM_Base_Start_IT(&htim6);
 
   // Initialize scale system
@@ -203,8 +205,6 @@ int main(void)
 	   }
 
 	  uint32_t current_time = HAL_GetTick();
-
-
 	  // Periodic weight measurement
 	  if (current_time - scale_state.last_measurement_time >= MEASUREMENT_INTERVAL) {
 		  scale_state.last_measurement_time = current_time;
@@ -465,18 +465,18 @@ static void MX_GPIO_Init(void)
 /* USER CODE BEGIN 4 */
 
 CardData* find_or_register_card(uint8_t* card_uid) {
-    // 1. Tìm thẻ đã tồn tại
+    // 1. Find existing card
     for (int i = 0; i < registered_card_count; i++) {
         if (memcmp(card_database[i].uid, card_uid, 5) == 0) {
             return &card_database[i];
         }
     }
 
-    // 2. Nếu không tìm thấy, đăng ký thẻ mới nếu còn chỗ
+    // 2. If no card found, register new card
     if (registered_card_count < MAX_REGISTERED_CARDS) {
         CardData* new_card = &card_database[registered_card_count];
         memcpy(new_card->uid, card_uid, 5);
-        // Khởi tạo lịch sử cân nặng
+        // Initialize weight history
         memset(&new_card->weight_data, 0, sizeof(WeightHistory));
         new_card->name[0] = '\0';
         registered_card_count++;
@@ -484,7 +484,7 @@ CardData* find_or_register_card(uint8_t* card_uid) {
         return new_card;
     }
 
-    // 3. Database đầy
+    // 3. If database is full
     scale_send_uart_data("ERROR: Card database is full. Cannot register new card.\r\n");
     return NULL;
 }
@@ -499,25 +499,23 @@ void push_weight_to_history(WeightHistory* history, float weight) {
 
 uint8_t are_all_weights_stable(WeightHistory* history) {
     if (history->count < MAX_WEIGHT_HISTORY) {
-        return 0; // Chưa đủ 10 giá trị
+        return 0;
     }
 
     float first_weight = history->history[0];
     for (int i = 1; i < MAX_WEIGHT_HISTORY; i++) {
-        // Sử dụng một ngưỡng nhỏ để so sánh số thực
         if (fabsf(history->history[i] - first_weight) > WEIGHT_STABILITY_THRESHOLD) {
-            return 0; // Tìm thấy một giá trị khác biệt
+            return 0;
         }
     }
 
-    return 1; // Tất cả 10 giá trị đều giống nhau
+    return 1;
 }
 
 void process_uart_command(void) {
-
-	int len = strlen((char*)uart_rx_buffer);
-	uart_rx_buffer[len - 1] = 0;
-	char* command = (char*)uart_rx_buffer;
+    uart_rx_buffer[strlen((char*)uart_rx_buffer) - 1] = 0; // Set the last character = NULL
+    char* command = (char*)uart_rx_buffer;
+	
     if (strcmp(command, "LIST") == 0) {
         scale_send_uart_data("\r\n--- Registered Card List ---\r\n");
         if (registered_card_count == 0) {
@@ -525,31 +523,28 @@ void process_uart_command(void) {
         } else {
             for (int i = 0; i < registered_card_count; i++) {
                 const char* display_name = (card_database[i].name[0] == '\0') ? "(not set)" : card_database[i].name;
-
-            	scale_send_uart_data("Card %d | Name: %-15s | UID: %02X%02X%02X%02X%02X | Saved Weight: %.1f kg\r\n",
-								 i + 1, // Index cho người dùng (bắt đầu từ 1)
-								 display_name,
-								 card_database[i].uid[0], card_database[i].uid[1], card_database[i].uid[2], card_database[i].uid[3], card_database[i].uid[4],
-								 card_database[i].weight_data.saved_weight);
+            	scale_send_uart_data(
+			"Card %d | Name: %-15s | UID: %02X%02X%02X%02X%02X | Saved Weight: %.1f kg\r\n",
+			 i + 1,
+		 	display_name,
+		 	card_database[i].uid[0], card_database[i].uid[1], card_database[i].uid[2], card_database[i].uid[3], card_database[i].uid[4],
+		 	card_database[i].weight_data.saved_weight
+		);
             }
         }
         scale_send_uart_data("----------------------------\r\n");
     } else if (strncmp(command, "SET ", 4) == 0) {
         char name_to_set[100];
         int card_index;
-
-        // Sử dụng sscanf để trích xuất tên và index từ chuỗi lệnh
-        int items_scanned = sscanf(command, "SET %s %d", name_to_set, &card_index);
-
-        if (items_scanned == 2) { // Phải trích xuất được 2 mục (tên và index)
-            // Kiểm tra xem index có hợp lệ không (người dùng nhập 1, 2, 3...)
+        if (sscanf(command, "SET %s %d", name_to_set, &card_index) == 2) { 
+            // Validate card index input
             if (card_index > 0 && card_index <= registered_card_count) {
-                // Chuyển đổi từ index người dùng (1-based) sang index mảng (0-based)
+                // Transform user input to card index
                 CardData* card = &card_database[card_index - 1];
 
-                // Sao chép tên mới vào thẻ (sử dụng strncpy để an toàn)
+                // Copy user input card name to card name
                 strncpy(card->name, name_to_set, sizeof(card->name) - 1);
-                card->name[sizeof(card->name) - 1] = '\0'; // Đảm bảo chuỗi luôn kết thúc bằng null
+                card->name[sizeof(card->name) - 1] = '\0';
 
                 scale_send_uart_data("Success: Name '%s' has been set for Card %d.\r\n", card->name, card_index);
             } else {
@@ -563,7 +558,6 @@ void process_uart_command(void) {
         if (history_count == 0) {
             scale_send_uart_data("History is empty.\r\n");
         } else {
-            // Xác định vị trí bắt đầu để in theo thứ tự thời gian
             int start_index = 0;
             if (history_count == MAX_WEIGHING_HISTORY) {
                 start_index = history_head;
@@ -574,12 +568,13 @@ void process_uart_command(void) {
                 HistoryEntry* entry = &weighing_history[current_index];
                 const char* display_name = (entry->name[0] == '\0') ? "(not set)" : entry->name;
 
-                // In ra từng mục trong lịch sử
-                scale_send_uart_data("#%d | Time: %lu ms | Name: %-15s | Weight: %.1f kg\r\n",
-                                     i + 1,
-                                     entry->timestamp,
-                                     display_name,
-                                     entry->weight);
+                scale_send_uart_data(
+			"#%d | Time: %lu ms | Name: %-15s | Weight: %.1f kg\r\n",
+		     	i + 1,
+		     	entry->timestamp,
+		     	display_name,
+		     	entry->weight
+		);
             }
         }
         scale_send_uart_data("--------------------------------------------\r\n");
@@ -588,7 +583,7 @@ void process_uart_command(void) {
         scale_send_uart_data("Unknown command: %s\r\n", uart_rx_buffer);
     }
 
-    // Reset buffer và cờ
+    // Reset buffer and flag
     memset(uart_rx_buffer, 0, sizeof(uart_rx_buffer));
     uart_rx_index = 0;
     uart_command_ready = 0;
@@ -597,9 +592,9 @@ void process_uart_command(void) {
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
     if (huart->Instance == USART1) {
         if (uart_rx_data == '\n' || uart_rx_data == '\r' || uart_rx_index >= sizeof(uart_rx_buffer) - 1) {
-            uart_rx_buffer[uart_rx_index] = '\0'; // Kết thúc chuỗi
+            uart_rx_buffer[uart_rx_index] = '\0'; // End of buffer
             if (uart_rx_index > 0) {
-                uart_command_ready = 1; // Báo hiệu có lệnh cần xử lý
+                uart_command_ready = 1; // Turn on flag
             }
             uart_rx_index = 0;
         } else {
@@ -611,46 +606,26 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
 }
 
 void save_weight_to_rfid_card(uint8_t* card_uid, float weight) {
-    // ---- PHẦN NÀY CẦN BẠN CÀI ĐẶT CHI TIẾT ----
-    // 1. Chọn Sector và Block trên thẻ để ghi dữ liệu.
-    // 2. Sử dụng hàm xác thực (ví dụ: PCD_Authenticate).
-    // 3. Chuẩn bị dữ liệu (chuyển float sang mảng byte).
-    // 4. Ghi dữ liệu vào block (ví dụ: PCD_Write).
-    // 5. Kết thúc giao tiếp.
-
-    // Tạm thời, chúng ta chỉ in ra UART để mô phỏng
     scale_send_uart_data("------ SAVING TO CARD ------\r\n");
     scale_send_uart_data("Card UID: %02X%02X%02X%02X%02X\r\n",
                          card_uid[0], card_uid[1], card_uid[2], card_uid[3], card_uid[4]);
-    scale_send_uart_data("Saving Weight: %.3f kg\r\n", weight);
+    scale_send_uart_data("Saving Weight: %.1f kg\r\n", weight);
     scale_send_uart_data("--------------------------\r\n");
 }
+
 void scale_init(void)
 {
     scale_send_uart_data("Initializing HX711 load cell...\r\n");
-
-    // Initialize HX711
     hx711_init(&hx711, HX711_SCK_PORT, HX711_SCK_PIN, HX711_DT_PORT, HX711_DT_PIN);
-
-    set_gain(&hx711, 128, 32);  // Channel A: 128 gain, Channel B: 32 gain
-
-    // Debug: Test if HX711 is responding
-	if (is_ready(&hx711)) {
-		scale_send_uart_data("HX711 is ready!\r\n");
-
-		// Read some raw values for debugging
-//		for (int i = 0; i < 5; i++) {
-//			long raw = get_value(&hx711, 1, CHANNEL_A);
-//			HAL_Delay(100);
-//		}
-	} else {
-		scale_send_uart_data("HX711 is NOT ready!\r\n");
-	}
-
-    // Set initial scale factor (you may need to adjust this)
+    set_gain(&hx711, 128, 32);
+	
+    if (is_ready(&hx711)) {
+	scale_send_uart_data("HX711 is ready!\r\n");
+    } else {
+	scale_send_uart_data("HX711 is NOT ready!\r\n");
+    }
+	
     set_scale(&hx711, SCALE_FACTOR, SCALE_FACTOR);
-
-    // Perform initial calibration
     scale_calibrate();
 
     // Initialize state variables
@@ -659,52 +634,25 @@ void scale_init(void)
     scale_state.weight_stable_count = 0;
     scale_state.weight_threshold = WEIGHT_STABILITY_THRESHOLD;
 
+    HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, GPIO_PIN_SET); // Turn on green LED when scale initialization complete
     scale_send_uart_data("Scale initialization complete\r\n");
 }
 
-/**
- * @brief Calibrate the scale (tare)
- */
 void scale_calibrate(void)
 {
     scale_send_uart_data("Calibrating scale... Please ensure scale is empty\r\n");
-    HAL_Delay(2000);  // Give user time to clear scale
+    HAL_Delay(2000);
     tare_all(&hx711, 10);
     scale_send_uart_data("Scale calibration complete\r\n");
 }
 
-/**
- * @brief Read raw weight from HX711
- * @return Raw weight value in kg
- */
 float scale_read_weight(void)
 {
-	// Debug: Check if HX711 is ready
-	if (!is_ready(&hx711)) {
-//		scale_send_uart_data("DEBUG - HX711 not ready!\r\n");
-		return 0.0f;
-	}
-
-	// Get raw value first for debugging
-//	long raw_value = get_value(&hx711, 1, CHANNEL_A);  // Single reading for faster response
-
-	// Get weight using library function
-	float weight = get_weight(&hx711, 10, CHANNEL_A);  // Single reading for faster response
-
-
-	// Ensure weight is not negative (noise or drift)
-	if (weight < 0.0f) {
-		weight = 0.0f;
-	}
-
-	return weight;
+    if (!is_ready(&hx711)) return 0.0f;
+    float weight = get_weight(&hx711, 10, CHANNEL_A);
+    return (weight < 0.0f) ? 0.0f : weight;
 }
 
-/**
- * @brief Apply low-pass filter to weight reading
- * @param raw_weight: Raw weight reading
- * @return Filtered weight
- */
 float scale_filter_weight(float raw_weight)
 {
     static float filtered_weight = 0.0f;
@@ -721,11 +669,6 @@ float scale_filter_weight(float raw_weight)
     return filtered_weight;
 }
 
-/**
- * @brief Check if weight reading is stable
- * @param weight: Current weight reading
- * @return 1 if stable, 0 if not stable
- */
 uint8_t scale_is_weight_stable(float weight)
 {
     float weight_diff = fabsf(weight - scale_state.previous_weight);
@@ -745,90 +688,56 @@ uint8_t scale_is_weight_stable(float weight)
     return 0;
 }
 
-/**
- * @brief Display weight on 7-segment display and send via UART
- * @param weight: Weight to display in kg
- */
 void scale_display_weight(float weight)
 {
-	if (weight < 0.0f) weight = 0.0f;
-	if (weight > 9.9f) weight = 9.9f;
+    if (weight < 0.0f) weight = 0.0f;
+    if (weight > 9.9f) weight = 9.9f;
 
-	// Chuyển đổi sang số nguyên để hiển thị (VD: 2.5kg -> 25)
-	int display_value = (int)(weight * 10 + 0.5f);  // +0.5 để làm tròn
-
-	// Hiển thị trên LED 7 đoạn với 1 chữ số thập phân
-	Set7SegDisplayWithDecimal(display_value, 1);  // Hiển thị với 1 chữ số sau dấu phẩy
-
-	// Gọi hàm chạy hiển thị LED 7 đoạn
-	Run7SegDisplay();
-
-    // Send weight data via UART
-//    scale_send_uart_data("Weight: %.3f kg (%.0f g)\r\n", weight, weight * 1000);
+    int display_value = (int)(weight * 10 + 0.5f);
+    Set7SegDisplayWithDecimal(display_value, 1);
+    Run7SegDisplay();
     scale_send_uart_data("Weight: %d (display_value) = %.3f kg\r\n", display_value, weight);
 }
 
-/**
- * @brief Process RFID reading and combine with weight data
- * @param weight: Current stable weight
- */
 void scale_process_rfid(float weight)
 {
     uint8_t CardUID[5];
 
     if (TM_MFRC522_Check(CardUID) == MI_OK) {
-        // Card detected - turn on green LED
-        HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, GPIO_PIN_SET);   // Green LED ON
-        HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13, GPIO_PIN_RESET); // Red LED OFF
-
         CardData* current_card = find_or_register_card(CardUID);
-		if (current_card == NULL) {
-			scale_send_uart_data("Full database\r\n");
-			// Lỗi: database đầy, không xử lý tiếp
-			return;
+	if (current_card == NULL) {
+		scale_send_uart_data("Full database\r\n");
+		// Error: Database if full
+		return;
+	}
+
+	push_weight_to_history(&current_card->weight_data, weight);
+
+	if (are_all_weights_stable(&current_card->weight_data)) {
+		float stable_weight = current_card->weight_data.history[0]; // Get stable value
+
+		// Only save new stable value if it different from with old one
+		if (fabsf(stable_weight - current_card->weight_data.saved_weight) >= 0.1f) {
+			save_weight_to_rfid_card(current_card->uid, stable_weight);
+			current_card->weight_data.saved_weight = stable_weight;
+			add_to_weighing_history(current_card, stable_weight);
 		}
+	}
 
-		push_weight_to_history(&current_card->weight_data, weight);
-
-		if (are_all_weights_stable(&current_card->weight_data)) {
-			float stable_weight = current_card->weight_data.history[0]; // Lấy giá trị ổn định
-
-			// Chỉ lưu nếu giá trị ổn định mới khác với giá trị đã lưu
-			// (tránh ghi vào thẻ liên tục không cần thiết)
-			if (fabsf(stable_weight - current_card->weight_data.saved_weight) >= 0.1f) {
-				// Thực hiện lưu giá trị cân nặng vào thẻ RFID
-				save_weight_to_rfid_card(current_card->uid, stable_weight);
-
-				// Cập nhật giá trị đã lưu trong RAM
-				current_card->weight_data.saved_weight = stable_weight;
-				add_to_weighing_history(current_card, stable_weight);
-			}
-		}
-
-		scale_send_uart_data("Card: %02X%02X%02X%02X%02X | Weight: %.1f kg | History Cnt: %d\r\n",
-				CardUID[0], CardUID[1], CardUID[2], CardUID[3], CardUID[4], weight, current_card->weight_data.count);
-    } else {
-        // No card detected - turn on red LED
-        HAL_GPIO_WritePin(GPIOG, GPIO_PIN_13, GPIO_PIN_SET);   // Red LED ON
-        HAL_GPIO_WritePin(GPIOG, GPIO_PIN_14, GPIO_PIN_RESET); // Green LED OFF
+	scale_send_uart_data("Card: %02X%02X%02X%02X%02X | Weight: %.1f kg | History Cnt: %d\r\n",
+			CardUID[0], CardUID[1], CardUID[2], CardUID[3], CardUID[4], weight, current_card->weight_data.count);
     }
 }
 
 void add_to_weighing_history(CardData* card, float weight) {
-    // Lấy vị trí tiếp theo trong bộ đệm vòng
     HistoryEntry* new_entry = &weighing_history[history_head];
 
-    // Sao chép thông tin vào mục lịch sử mới
     memcpy(new_entry->uid, card->uid, 5);
     strncpy(new_entry->name, card->name, sizeof(new_entry->name) - 1);
-    new_entry->name[sizeof(new_entry->name) - 1] = '\0'; // Đảm bảo an toàn
+    new_entry->name[sizeof(new_entry->name) - 1] = '\0';
     new_entry->weight = weight;
-    new_entry->timestamp = HAL_GetTick(); // Ghi lại dấu thời gian
-
-    // Di chuyển con trỏ của bộ đệm vòng
+    new_entry->timestamp = HAL_GetTick();
     history_head = (history_head + 1) % MAX_WEIGHING_HISTORY;
-
-    // Tăng số lượng mục, nhưng không vượt quá kích thước tối đa
     if (history_count < MAX_WEIGHING_HISTORY) {
         history_count++;
     }
@@ -836,11 +745,6 @@ void add_to_weighing_history(CardData* card, float weight) {
     scale_send_uart_data("OK: New entry added to weighing history.\r\n");
 }
 
-/**
- * @brief Send formatted data via UART
- * @param format: Printf-style format string
- * @param ...: Variable arguments
- */
 void scale_send_uart_data(const char* format, ...)
 {
     va_list args;
@@ -855,10 +759,6 @@ void scale_send_uart_data(const char* format, ...)
     }
 }
 
-/**
- * @brief Handle system errors
- * @param error_msg: Error message to display
- */
 void scale_handle_error(const char* error_msg)
 {
     scale_send_uart_data("ERROR: %s\r\n", error_msg);
