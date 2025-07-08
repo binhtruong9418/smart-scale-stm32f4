@@ -1,254 +1,202 @@
 # Smart Scale System with RFID Card Management
 
-## Tổng quan dự án
+## GIỚI THIỆU
+**Đề bài**: *Thiết kế hệ thống cân điện tử thông minh sử dụng vi điều khiển STM32F4 tích hợp cảm biến trọng lượng HX711, module RFID MFRC522 và màn hình LED 7 đoạn. Hệ thống cho phép lưu trữ trọng lượng của các thẻ RFID khác nhau và quản lý lịch sử cân.*
 
-Hệ thống cân điện tử thông minh sử dụng vi điều khiển STM32F4 tích hợp cảm biến trọng lượng HX711, module RFID MFRC522 và màn hình LED 7 đoạn. Hệ thống cho phép lưu trữ trọng lượng của các thẻ RFID khác nhau và quản lý lịch sử cân.
+**Sản phẩm:**
+1. Cân điện tử chính xác với độ chính xác ±0.1 kg (100g)
+2. Quản lý thẻ RFID với khả năng lưu trữ tối đa 20 thẻ
+3. Lưu trữ và hiển thị lịch sử cân (50 lần cân gần nhất)
+4. Giao tiếp UART với các lệnh quản lý: LIST, SET, HISTORY
+5. Hiển thị trọng lượng trên LED 7 đoạn với 1 chữ số thập phân
+6. Bộ lọc trọng lượng thông minh với thuật toán low-pass filter
 
-## Nguyên lý hoạt động
+- Ảnh chụp minh họa:\
+  ![Ảnh minh họa](https://soict.hust.edu.vn/wp-content/uploads/logo-soict-hust-1-1024x416.png)
 
-### 1. Cân điện tử và Load cell
+## TÁC GIẢ
+- Tên nhóm: Lẩu Thái
+- Thành viên trong nhóm
+  |STT|Họ tên|MSSV|Công việc|
+  |--:|--|--|--|
+  |1|Trương Đức Bình|20215531|Lập trình cân, quản lý thẻ, lập trình cho RFID MFRC522 và hiệu chuẩn cân|
+  |2|Bùi Trung Đức|20215565|Phần cứng cho RFID, HX711, LED 7 đoạn, lập trình cân và quản lý lịch sử|
+  |3|Pham Công Thành|20215642|Xử lý UART, Lập trình các lệnh giao tiếp với UART với Hercules, lập trình xử lý lưu thẻ|
 
-#### Nguyên lý hoạt động của Load cell:
-- **Load cell** là cảm biến chuyển đổi lực cơ học thành tín hiệu điện
-- Sử dụng nguyên lý **strain gauge** (điện trở biến dạng):
-  - Khi có lực tác dụng, load cell bị biến dạng
-  - Điện trở của strain gauge thay đổi theo mức độ biến dạng
-  - Tạo ra sự thay đổi điện áp đầu ra tỷ lệ với trọng lượng
+## MÔI TRƯỜNG HOẠT ĐỘNG
+- **MCU**: STM32F429-DISC
+- **Cảm biến trọng lượng**: Load cell 10kg với IC HX711 (ADC 24-bit)
+- **Module RFID**: MFRC522
+- **Hiển thị**: 2 LED 7 đoạn 1 chữ số
+- **Giao tiếp**: UART 115200 baud
+- **Thư viện**: STM32 HAL, TM_MFRC522, HX711 Library
 
-#### IC HX711:
-- **Bộ chuyển đổi ADC 24-bit** chuyên dụng cho load cell
-- Khuếch đại tín hiệu từ load cell (gain 32, 64, 128)
-- Giao tiếp với vi điều khiển qua 2 chân: SCK (clock) và DT (data)
-- Hỗ trợ tính năng tare (về không) và calibration (hiệu chuẩn)
+## SƠ ĐỒ SCHEMATIC
 
-### 2. Cấu hình phần cứng
+### Bảng kết nối chính:
+|STM32F429|Module ngoại vi|Chức năng|
+|--|--|--|
+|PA11|HX711 DT|Đọc dữ liệu từ load cell|
+|PA12|HX711 SCK|Clock cho HX711|
+|SPI4|MFRC522|Giao tiếp RFID |
+|PE4-PE14|LED 7 đoạn|Hiển thị segments A-G, DP|
+|PE15|LED 7 đoạn|Common cathode control|
+|PG2-PG3|LED 7 đoạn|Digit select (1-2)|
+|PA9/PA10|UART1|Debug và giao tiếp PC|
+|PG13|LED đỏ|Thẻ đang được quét|
+|PG14|LED xanh|Hệ thống sẵn sàng|
 
-#### Kết nối HX711:
-- **DT (Data)**: PA11 (Input)
-- **SCK (Clock)**: PA12 (Output)
-- **Scale Factor**: 83000 (cho load cell 10kg) hoặc 44000 (cho load cell 20kg)
-
-#### Kết nối RFID MFRC522:
-- Sử dụng giao tiếp SPI4
-- Tần số SPI: 180MHz/16 = 11.25MHz
-
-#### LED 7 đoạn:
-- 2 LED 7 đoạn hiển thị trọng lượng với 1 chữ số thập phân
-- Điều khiển qua các chân GPIO trên cổng PE và PG
-
-#### LED trạng thái:
-- **LED xanh (PG14)**: Hệ thống sẵn sàng
-- **LED đỏ (PG13)**: Báo lỗi
-
-## Sơ đồ mạch
-
-### Kết nối LED 7 đoạn:
-
+### Sơ đồ khối hệ thống:
 ```
-STM32F4 GPIO Pins:
-PE4  -> A (segment a)
-PE8  -> B (segment b)  
-PE9  -> C (segment c)
-PE10 -> D (segment d)
-PE11 -> E (segment e)
-PE12 -> F (segment f)
-PE13 -> G (segment g)
-PE14 -> DP (decimal point)
-PE15 -> Common cathode control
-
-PG2  -> Digit 1 select
-PG3  -> Digit 2 select
-```
-
-### Sơ đồ kết nối chi tiết:
-
-```
-[STM32F4]
-    |
-    |-- PE4-PE14 --> 7-Segment Display 1
-    |-- PG2-PG3  --> Digit Select
-    |-- PA11     --> HX711 DT
-    |-- PA12     --> HX711 SCK
-    |-- SPI4     --> MFRC522 RFID
-    |-- PA9/PA10 --> UART1 (Debug)
-    |-- PG13     --> LED Red (Error)
-    |-- PG14     --> LED Green (Ready)
+┌─────────────┐    ┌─────────────┐    ┌─────────────┐
+│  Load Cell  │────│   HX711     │────│  STM32F429  │
+└─────────────┘    └─────────────┘    │             │
+                                      │             │
+┌─────────────┐    ┌─────────────┐    │             │
+│ RFID Reader │────│  MFRC522    │────│             │
+└─────────────┘    └─────────────┘    │             │
+                                      │             │
+┌─────────────┐                       │             │
+│7-Seg Display│───────────────────────│             │
+└─────────────┘                       │             │
+                                      │             │
+┌─────────────┐                       │             │
+│  UART/PC    │───────────────────────│             │
+└─────────────┘                       └─────────────┘
 ```
 
-## Luồng hoạt động chương trình
+## TÍCH HỢP HỆ THỐNG
 
-### 1. Khởi tạo hệ thống:
-```c
-// Khởi tạo các peripheral
-HAL_Init();
-SystemClock_Config();
-MX_GPIO_Init();
-MX_SPI4_Init();
-MX_USART1_UART_Init();
-MX_TIM6_Init();
+### Thành phần phần cứng:
+- **STM32F429**: Vi điều khiển chính, xử lý dữ liệu và điều khiển hệ thống
+- **Load Cell + HX711**: Cảm biến trọng lượng chính xác cao với ADC 24-bit chuyên dụng
+- **MFRC522**: Module RFID đọc/ghi thẻ, lưu trữ dữ liệu người dùng
+- **LED 7 đoạn**: Hiển thị trọng lượng trực quan với 1 chữ số phần nguyên và 1 chữ số thập phân
+- **LED trạng thái**: Báo hiệu trạng thái hoạt động và đang nhận thẻ
 
-// Khởi tạo cân và RFID
-scale_init();
-TM_MFRC522_Init();
+### Thành phần phần mềm:
+- **Scale Module**: Xử lý đọc và lọc dữ liệu trọng lượng, thuật toán ổn định
+- **RFID Manager**: Quản lý thẻ RFID, lưu trữ và truy xuất dữ liệu
+- **Display Driver**: Điều khiển LED 7 đoạn, hiển thị multiplexing
+- **UART Handler**: Xử lý giao tiếp với PC, các lệnh quản lý
+- **Data Manager**: Quản lý lịch sử cân, lưu trữ dữ liệu trong RAM
+
+## ĐẶC TẢ HÀM
+
+### Hàm xử lý cân:
+```C
+/**
+ * Khởi tạo hệ thống cân điện tử
+ * Thiết lập HX711, hiệu chuẩn và về không
+ */
+void scale_init(void);
+
+/**
+ * Đọc trọng lượng thô từ HX711
+ * @return float Trọng lượng đọc được (kg)
+ */
+float scale_read_weight(void);
+
+/**
+ * Bộ lọc trọng lượng sử dụng low-pass filter
+ * @param raw_weight Trọng lượng thô đầu vào
+ * @return float Trọng lượng sau khi lọc
+ */
+float scale_filter_weight(float raw_weight);
+
+/**
+ * Kiểm tra độ ổn định của trọng lượng
+ * @param weight Trọng lượng cần kiểm tra
+ * @return bool true nếu ổn định, false nếu không
+ */
+bool scale_is_weight_stable(float weight);
 ```
 
-### 2. Vòng lặp chính:
-```c
-while (1) {
-    // 1. Xử lý lệnh UART
-    if (uart_command_ready) {
-        process_uart_command();
-    }
-    
-    // 2. Đọc trọng lượng (mỗi 100ms)
-    if (current_time - last_measurement_time >= 100) {
-        float raw_weight = scale_read_weight();
-        float filtered_weight = scale_filter_weight(raw_weight);
-        
-        // 3. Kiểm tra độ ổn định
-        if (scale_is_weight_stable(filtered_weight)) {
-            // 4. Hiển thị trọng lượng
-            scale_display_weight(filtered_weight);
-            
-            // 5. Xử lý thẻ RFID
-            scale_process_rfid(filtered_weight);
-        }
-    }
-}
+### Hàm xử lý RFID:
+```C
+/**
+ * Tìm kiếm hoặc đăng ký thẻ mới
+ * @param uid Mã UID của thẻ RFID
+ * @return CardData* Con trỏ đến dữ liệu thẻ
+ */
+CardData* find_or_register_card(uint8_t* uid);
+
+/**
+ * Thêm trọng lượng vào lịch sử thẻ
+ * @param weight_data Con trỏ đến dữ liệu trọng lượng
+ * @param weight Trọng lượng cần thêm
+ */
+void push_weight_to_history(WeightData* weight_data, float weight);
+
+/**
+ * Lưu trọng lượng ổn định vào thẻ RFID
+ * @param uid Mã UID thẻ
+ * @param weight Trọng lượng cần lưu
+ */
+void save_weight_to_rfid_card(uint8_t* uid, float weight);
 ```
 
-### 3. Xử lý thẻ RFID:
-```c
-void scale_process_rfid(float weight) {
-    uint8_t CardUID[5];
-    
-    if (TM_MFRC522_Check(CardUID) == MI_OK) {
-        // Tìm hoặc đăng ký thẻ mới
-        CardData* current_card = find_or_register_card(CardUID);
-        
-        // Thêm trọng lượng vào lịch sử
-        push_weight_to_history(&current_card->weight_data, weight);
-        
-        // Kiểm tra độ ổn định (5 lần đo liên tiếp)
-        if (are_all_weights_stable(&current_card->weight_data)) {
-            // Lưu trọng lượng ổn định
-            save_weight_to_rfid_card(current_card->uid, stable_weight);
-            current_card->weight_data.saved_weight = stable_weight;
-            add_to_weighing_history(current_card, stable_weight);
-        }
-    }
-}
+### Hàm xử lý UART:
+```C
+/**
+ * Xử lý lệnh LIST - hiển thị danh sách thẻ
+ */
+void handle_list_command(void);
+
+/**
+ * Xử lý lệnh SET - đặt tên cho thẻ
+ * @param name Tên cần đặt
+ * @param index Chỉ số thẻ
+ */
+void handle_set_command(char* name, int index);
+
+/**
+ * Xử lý lệnh HISTORY - hiển thị lịch sử cân
+ */
+void handle_history_command(void);
 ```
 
-### 4. Bộ lọc trọng lượng:
-```c
-float scale_filter_weight(float raw_weight) {
-    // Bộ lọc thông thấp: y[n] = α * x[n] + (1-α) * y[n-1]
-    filtered_weight = WEIGHT_FILTER_ALPHA * raw_weight + 
-                     (1.0f - WEIGHT_FILTER_ALPHA) * filtered_weight;
-    return filtered_weight;
-}
-```
+## THÔNG SỐ KỸ THUẬT
 
-## Các lệnh UART
+### Đặc tính cân:
+- **Độ chính xác**: ±0.1 kg (100g)
+- **Khả năng cân**: 10kg
+- **Tần suất đo**: 10Hz (100ms/lần)
+- **Thời gian ổn định**: 500ms (5 lần đo liên tiếp)
+- **Bộ lọc**: Low-pass filter (α = 0.3)
 
-Hệ thống hỗ trợ các lệnh qua UART với tốc độ **115200 baud**:
+### Khả năng lưu trữ:
+- **Số thẻ RFID**: Tối đa 20 thẻ
+- **Lịch sử cân**: 50 lần cân gần nhất
+- **Lịch sử mỗi thẻ**: 5 giá trị trọng lượng
 
-### 1. `LIST`
-- **Mô tả**: Hiển thị danh sách tất cả thẻ đã đăng ký
-- **Cú pháp**: `LIST`
-- **Ví dụ output**:
+### Giao tiếp:
+- **UART**: 115200 baud, 8N1
+- **SPI RFID**: 11.25MHz
+- **Lệnh hỗ trợ**: LIST, SET, HISTORY
+
+## KẾT QUẢ
+
+### Giao diện LED 7 đoạn:
+- Hiển thị trọng lượng với format: X.X (ví dụ: 5.2 kg)
+- Tần suất refresh: 2Hz (500ms)
+- Độ sáng ổn định, dễ đọc
+
+### Chức năng RFID:
+- Đọc thẻ nhanh chóng (<1 giây)
+- Lưu trữ tên và trọng lượng cho mỗi thẻ
+- Quản lý lịch sử cân chi tiết
+
+### Giao tiếp UART:
 ```
 --- Registered Card List ---
 Card 1 | Name: John_Doe      | UID: 1234567890 | Saved Weight: 75.2 kg
-Card 2 | Name: (not set)     | UID: ABCDEF1234 | Saved Weight: 0.0 kg
+Card 2 | Name: Jane_Smith    | UID: ABCDEF1234 | Saved Weight: 68.5 kg
 ----------------------------
 ```
 
-### 2. `SET <name> <index>`
-- **Mô tả**: Đặt tên cho thẻ theo index
-- **Cú pháp**: `SET <tên_thẻ> <số_thứ_tự>`
-- **Ví dụ**: `SET John_Doe 1`
-- **Output**: `Success: Name 'John_Doe' has been set for Card 1.`
+### Video demo:
+[Link video sản phẩm hoạt động]
 
-### 3. `HISTORY`
-- **Mô tả**: Hiển thị lịch sử cân (50 lần cân gần nhất)
-- **Cú pháp**: `HISTORY`
-- **Ví dụ output**:
-```
---- Weighing History (Oldest to Newest) ---
-#1 | Time: 12345 ms | Name: John_Doe      | Weight: 75.2 kg
-#2 | Time: 23456 ms | Name: Jane_Smith    | Weight: 68.5 kg
---------------------------------------------
-```
-
-## Cấu hình và thông số kỹ thuật
-
-### Thông số cân:
-- **Độ chính xác**: ±0.01 kg (10g)
-- **Số lần đo ổn định**: 5 lần liên tiếp
-- **Tần suất đo**: 100ms/lần
-- **Tần suất hiển thị**: 500ms/lần
-- **Bộ lọc**: Low-pass filter (α = 0.3)
-
-### Giới hạn lưu trữ:
-- **Số thẻ tối đa**: 20 thẻ
-- **Lịch sử cân**: 50 lần cân gần nhất
-- **Lịch sử trọng lượng mỗi thẻ**: 5 giá trị
-
-### Cấu hình GPIO:
-```c
-// HX711 Load Cell
-#define HX711_DT_PORT     GPIOA
-#define HX711_DT_PIN      GPIO_PIN_11
-#define HX711_SCK_PORT    GPIOA  
-#define HX711_SCK_PIN     GPIO_PIN_12
-
-// LED Status
-#define LED_RED_PORT      GPIOG
-#define LED_RED_PIN       GPIO_PIN_13
-#define LED_GREEN_PORT    GPIOG
-#define LED_GREEN_PIN     GPIO_PIN_14
-
-// 7-Segment Display
-#define SEG_PORT          GPIOE
-#define SEG_PINS          GPIO_PIN_4 to GPIO_PIN_15
-```
-
-## Thư viện sử dụng
-
-### 1. STM32 HAL Library
-- **Nguồn**: STMicroelectronics
-- **Mục đích**: Điều khiển peripheral STM32F4
-- **Modules**: GPIO, SPI, UART, Timer
-
-### 2. TM_MFRC522 Library
-- **Nguồn**: Tilen Majerle
-- **File**: `tm_stm32f4_mfrc522.h`
-- **Mục đích**: Giao tiếp với module RFID MFRC522
-- **Functions**: `TM_MFRC522_Init()`, `TM_MFRC522_Check()`
-
-### 3. HX711 Library
-- **File**: `HX711.h`
-- **Mục đích**: Giao tiếp với IC HX711 load cell
-- **Functions**: 
-  - `hx711_init()`: Khởi tạo
-  - `get_weight()`: Đọc trọng lượng
-  - `tare_all()`: Về không
-  - `set_scale()`: Hiệu chuẩn
-
-### 4. 7-Segment Display Library
-- **File**: `7seg.h`
-- **Mục đích**: Điều khiển màn hình LED 7 đoạn
-- **Functions**:
-  - `Set7SegDisplayWithDecimal()`: Hiển thị số với dấu thập phân
-  - `Run7SegDisplay()`: Chạy hiển thị
-
-## Compilation và Debug
-
-### Compiler Settings:
-- **Toolchain**: ARM GCC
-- **Optimization**: -O0 (Debug) / -O2 (Release)
-- **MCU**: STM32F446RET6
-- **Clock**: 180MHz (HSE + PLL)
 ---
+*Dự án được phát triển cho môn Hệ Nhúng - Trường Đại học Bách khoa Hà Nội*
