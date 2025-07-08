@@ -251,5 +251,6 @@ Card 2 | Name: (not set)     | UID: ABCDEF1234 | Saved Weight: 0.0 kg
 - **Optimization**: -O0 (Debug) / -O2 (Release)
 - **MCU**: STM32F446RET6
 - **Clock**: 180MHz (HSE + PLL)
-  
+
+## [Sơ đồ cài đặt chi tiết](./smart-scale-system.html)
 ---
