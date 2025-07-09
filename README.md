@@ -196,7 +196,7 @@ Card 2 | Name: Jane_Smith    | UID: ABCDEF1234 | Saved Weight: 68.5 kg
 ```
 
 ### Video demo:
-[Link video sản phẩm hoạt động](./IMG_2448.MOV)
+[Link video sản phẩm hoạt động](https://s3.ducbinh203.tech/demo/IMG_2448.mp4)
 
 ---
 *Dự án được phát triển cho môn Hệ Nhúng - Trường Đại học Bách khoa Hà Nội*
