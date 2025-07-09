@@ -12,7 +12,7 @@
 6. Bộ lọc trọng lượng thông minh với thuật toán low-pass filter
 
 - Ảnh chụp minh họa:\
-  ![Ảnh minh họa](https://soict.hust.edu.vn/wp-content/uploads/logo-soict-hust-1-1024x416.png)
+  ![Ảnh minh họa](./demo.jpg)
 
 ## TÁC GIẢ
 - Tên nhóm: Lẩu Thái
@@ -196,7 +196,7 @@ Card 2 | Name: Jane_Smith    | UID: ABCDEF1234 | Saved Weight: 68.5 kg
 ```
 
 ### Video demo:
-[Link video sản phẩm hoạt động]
+[Link video sản phẩm hoạt động](./IMG_2448.mov)
 
 ---
 *Dự án được phát triển cho môn Hệ Nhúng - Trường Đại học Bách khoa Hà Nội*
